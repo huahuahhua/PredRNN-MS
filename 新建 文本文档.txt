@@ -1,2 +1,4 @@
 PREDRNN
 MS多尺度版本
+6层多尺度
+hidden为66

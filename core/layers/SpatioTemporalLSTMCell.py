@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class SpatioTemporalLSTMCell(nn.Module):
-    def __init__(self, in_channel, hidden_dim, configs):
+    def __init__(self, in_channel, hidden_dim, configs,width,height):
         super(SpatioTemporalLSTMCell, self).__init__()
 
         self.input_channels = in_channel
@@ -11,8 +11,8 @@ class SpatioTemporalLSTMCell(nn.Module):
         self.kernel_size = configs.filter_size
         self.padding = (self.kernel_size[0] // 2, self.kernel_size[1] // 2)
         self.device = configs.device
-        self.width = configs.img_width // configs.patch_size // configs.sr_size
-        self.height = configs.img_height // configs.patch_size // configs.sr_size
+        self.width = width
+        self.height = height
 
         self._forget_bias = 1.0
 

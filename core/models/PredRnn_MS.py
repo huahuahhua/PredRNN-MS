@@ -16,96 +16,47 @@ class RNN(nn.Module):
         self.states = ['recall', 'normal']
         if not self.configs.model_mode in self.states:
             raise AssertionError
-        cell_list = []
+        self.embed = nn.Conv2d(self.frame_channel, num_hidden[0], kernel_size=1, stride=1, padding=0)
+        lstm = [SpatioTemporalLSTMCell(num_hidden[0], num_hidden[0], configs, configs.img_width, configs.img_height),
+                SpatioTemporalLSTMCell(num_hidden[0], num_hidden[0], configs, configs.img_width / 2,
+                                       configs.img_height / 2),
+                SpatioTemporalLSTMCell(num_hidden[0], num_hidden[0], configs, configs.img_width / 4,
+                                       configs.img_height / 4),
+                SpatioTemporalLSTMCell(num_hidden[0], num_hidden[0], configs, configs.img_width / 4,
+                                       configs.img_height / 4),
+                SpatioTemporalLSTMCell(num_hidden[0], num_hidden[0], configs, configs.img_width / 2,
+                                       configs.img_height / 2),
+                SpatioTemporalLSTMCell(num_hidden[0], num_hidden[0], configs, configs.img_width, configs.img_height)]
+        self.cell_list = nn.ModuleList(lstm)
 
-        width = configs.img_width // configs.patch_size // configs.sr_size
-        height = configs.img_height // configs.patch_size // configs.sr_size
+        self.downs = nn.ModuleList([nn.MaxPool2d(2, 2), nn.MaxPool2d(2, 2)])
+        self.ups = nn.ModuleList(
+            [nn.Upsample(scale_factor=2, mode='bilinear'), nn.Upsample(scale_factor=2, mode='bilinear')])
 
-        for i in range(num_layers):
-            in_channel = num_hidden[i - 1]
-            cell_list.append(
-                SpatioTemporalLSTMCell(in_channel, num_hidden[i], configs)
-            )
-        self.cell_list = nn.ModuleList(cell_list)
+        self.downs_m = nn.ModuleList([nn.MaxPool2d(2, 2), nn.MaxPool2d(2, 2)])
+        self.ups_m = nn.ModuleList(
+            [nn.Upsample(scale_factor=2, mode='bilinear'), nn.Upsample(scale_factor=2, mode='bilinear')])
 
-        # Encoder
-        n = int(math.log2(configs.sr_size))
-        encoders = []
-        encoder = nn.Sequential()
-        encoder.add_module(name='encoder_t_conv{0}'.format(-1),
-                           module=nn.Conv2d(in_channels=self.frame_channel,
-                                            out_channels=self.num_hidden[0],
-                                            stride=1,
-                                            padding=0,
-                                            kernel_size=1))
-        encoder.add_module(name='relu_t_{0}'.format(-1),
-                           module=nn.LeakyReLU(0.2))
-        encoders.append(encoder)
-        for i in range(n):
-            encoder = nn.Sequential()
-            encoder.add_module(name='encoder_t{0}'.format(i),
-                               module=nn.Conv2d(in_channels=self.num_hidden[0],
-                                                out_channels=self.num_hidden[0],
-                                                stride=(2, 2),
-                                                padding=(1, 1),
-                                                kernel_size=(3, 3)
-                                                ))
-            encoder.add_module(name='encoder_t_relu{0}'.format(i),
-                               module=nn.LeakyReLU(0.2))
-            encoders.append(encoder)
-        self.encoders = nn.ModuleList(encoders)
+        self.fc = nn.Conv2d(self.frame_channel * 2, self.frame_channel, kernel_size=1, stride=1, padding=0)
 
-        # Decoder
-        decoders = []
-
-        for i in range(n - 1):
-            decoder = nn.Sequential()
-            decoder.add_module(name='c_decoder{0}'.format(i),
-                               module=nn.ConvTranspose2d(in_channels=self.num_hidden[-1],
-                                                         out_channels=self.num_hidden[-1],
-                                                         stride=(2, 2),
-                                                         padding=(1, 1),
-                                                         kernel_size=(3, 3),
-                                                         output_padding=(1, 1)
-                                                         ))
-            decoder.add_module(name='c_decoder_relu{0}'.format(i),
-                               module=nn.LeakyReLU(0.2))
-            decoders.append(decoder)
-
-        if n > 0:
-            decoder = nn.Sequential()
-            decoder.add_module(name='c_decoder{0}'.format(n - 1),
-                               module=nn.ConvTranspose2d(in_channels=self.num_hidden[-1],
-                                                         out_channels=self.num_hidden[-1],
-                                                         stride=(2, 2),
-                                                         padding=(1, 1),
-                                                         kernel_size=(3, 3),
-                                                         output_padding=(1, 1)
-                                                         ))
-            decoders.append(decoder)
-        self.decoders = nn.ModuleList(decoders)
-
-        self.srcnn = nn.Sequential(
-            nn.Conv2d(self.num_hidden[-1], self.frame_channel, kernel_size=1, stride=1, padding=0)
-        )
-        self.merge = nn.Conv2d(self.num_hidden[-1] * 2, self.num_hidden[-1], kernel_size=1, stride=1, padding=0)
-        self.conv_last_sr = nn.Conv2d(self.frame_channel * 2, self.frame_channel, kernel_size=1, stride=1, padding=0)
+        print('This is Multi Scale PredRNN!')
 
     def forward(self, frames, mask_true):
+
         height = frames.shape[3] // self.configs.sr_size
         width = frames.shape[4] // self.configs.sr_size
         batch = frames.shape[0]
 
-        h_t = []
-        c_t = []
         next_frames = []
 
-        for i in range(self.num_layers):
-            zeros = torch.zeros([batch, self.num_hidden[i], height, width]).to(self.configs.device)
-            h_t.append(zeros)
-            c_t.append(zeros)
-        memory = torch.zeros([batch, self.num_hidden[0], height, width]).to(self.configs.device)
+        zeros = torch.zeros([batch, self.num_hidden[0], height, width]).to(self.configs.device)
+        zeros2 = torch.zeros([batch, self.num_hidden[0], height / 2, width / 2]).to(self.configs.device)
+        zeros4 = torch.zeros([batch, self.num_hidden[0], height / 4, width / 4]).to(self.configs.device)
 
+        h_t = [zeros, zeros2, zeros4, zeros4, zeros2, zeros]
+        c_t = [zeros, zeros2, zeros4, zeros4, zeros2, zeros]
+
+        memory = torch.zeros([batch, self.num_hidden[0], height, width]).to(self.configs.device)
         mask_true = mask_true.permute(0, 1, 4, 2, 3).contiguous()
 
         x_gen = None
@@ -116,24 +67,36 @@ class RNN(nn.Module):
                 time_diff = t - self.configs.input_length
                 net = mask_true[:, time_diff] * frames[:, t] + (1 - mask_true[:, time_diff]) * x_gen
             frames_feature = net
-            frames_feature_encoded = []
-            for i in range(len(self.encoders)):
-                frames_feature = self.encoders[i](frames_feature)
-                frames_feature_encoded.append(frames_feature)
 
-            for i in range(self.num_layers):
-                if i == 0:
+            frames_feature = self.embed(frames_feature)
+
+            for l in range(self.num_layers):
+
+                if l == 0:
                     h_t[0], c_t[0], memory = self.cell_list[0](frames_feature, h_t[0], c_t[0], memory)
-                else:
-                    h_t[i], c_t[i], memory = self.cell_list[i](h_t[i - 1], h_t[i], c_t[i], memory)
+                    frames_feature = self.downs[0](h_t[0])
+                    memory = self.downs_m[0](memory)
+                elif l == 1:
+                    h_t[l], c_t[l], memory = self.cell_list[l](frames_feature, h_t[l], c_t[l], memory)
+                    frames_feature = self.downs[1](h_t[l])
+                    memory = self.downs_m[1](memory)
+                elif l == 2:
+                    h_t[l], c_t[l], memory = self.cell_list[l](frames_feature, h_t[l], c_t[l], memory)
+                    frames_feature = h_t[l]
+                elif l == 3:
+                    h_t[l], c_t[l], memory = self.cell_list[l](frames_feature, h_t[l], c_t[l], memory)
+                    frames_feature = self.ups[0](h_t[l])
+                    memory = self.ups_m[0](memory)
+                elif l == 4:
+                    h_t[l], c_t[l], memory = self.cell_list[l](frames_feature, h_t[l], c_t[l], memory)
+                    frames_feature = self.ups[1](h_t[l])
+                    memory = self.ups_m[1](memory)
+                elif l == 5:
+                    h_t[l], c_t[l], memory = self.cell_list[l](frames_feature, h_t[l], c_t[l], memory)
 
             x_gen = h_t[-1]
-            for i in range(len(self.decoders)):
-                x_gen = self.decoders[i](x_gen)
-                if self.configs.model_mode == 'recall':
-                    x_gen = x_gen + frames_feature_encoded[-2 - i]
 
-            x_gen = self.srcnn(x_gen)
+            x_gen = self.fc(x_gen)
             next_frames.append(x_gen)
         next_frames = torch.stack(next_frames, dim=0).permute(1, 0, 2, 3, 4).contiguous()
         return next_frames
