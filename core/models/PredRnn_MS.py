@@ -3,7 +3,6 @@ import torch.nn as nn
 from core.layers.SpatioTemporalLSTMCell import SpatioTemporalLSTMCell
 import math
 
-
 class RNN(nn.Module):
     def __init__(self, num_layers, num_hidden, configs):
         super(RNN, self).__init__()
@@ -37,21 +36,21 @@ class RNN(nn.Module):
         self.ups_m = nn.ModuleList(
             [nn.Upsample(scale_factor=2, mode='bilinear'), nn.Upsample(scale_factor=2, mode='bilinear')])
 
-        self.fc = nn.Conv2d(self.frame_channel * 2, self.frame_channel, kernel_size=1, stride=1, padding=0)
+        self.fc = nn.Conv2d(num_hidden[0], self.frame_channel, kernel_size=1, stride=1, padding=0)
 
         print('This is Multi Scale PredRNN!')
 
     def forward(self, frames, mask_true):
 
-        height = frames.shape[3] // self.configs.sr_size
-        width = frames.shape[4] // self.configs.sr_size
+        height = frames.shape[3]
+        width = frames.shape[4]
         batch = frames.shape[0]
 
         next_frames = []
 
         zeros = torch.zeros([batch, self.num_hidden[0], height, width]).to(self.configs.device)
-        zeros2 = torch.zeros([batch, self.num_hidden[0], height / 2, width / 2]).to(self.configs.device)
-        zeros4 = torch.zeros([batch, self.num_hidden[0], height / 4, width / 4]).to(self.configs.device)
+        zeros2 = torch.zeros([batch, self.num_hidden[0], int(height / 2), int(width / 2)]).to(self.configs.device)
+        zeros4 = torch.zeros([batch, self.num_hidden[0], int(height / 4), int(width / 4)]).to(self.configs.device)
 
         h_t = [zeros, zeros2, zeros4, zeros4, zeros2, zeros]
         c_t = [zeros, zeros2, zeros4, zeros4, zeros2, zeros]
@@ -71,7 +70,7 @@ class RNN(nn.Module):
             frames_feature = self.embed(frames_feature)
 
             for l in range(self.num_layers):
-
+                # print("第几层出现了问题",l)
                 if l == 0:
                     h_t[0], c_t[0], memory = self.cell_list[0](frames_feature, h_t[0], c_t[0], memory)
                     frames_feature = self.downs[0](h_t[0])

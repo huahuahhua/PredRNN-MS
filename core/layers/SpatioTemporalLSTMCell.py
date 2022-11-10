@@ -11,8 +11,8 @@ class SpatioTemporalLSTMCell(nn.Module):
         self.kernel_size = configs.filter_size
         self.padding = (self.kernel_size[0] // 2, self.kernel_size[1] // 2)
         self.device = configs.device
-        self.width = width
-        self.height = height
+        self.width = int(width)
+        self.height = int(height)
 
         self._forget_bias = 1.0
 
